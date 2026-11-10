@@ -170,8 +170,13 @@ def main() -> int:
     send("/native-status\r")
     ok &= wait_for("help", "cacheRead", 5)
     send("/quit\r")
+    # Keep draining the PTY while Pi flushes its final redraw. Waiting without
+    # reading can fill macOS's smaller PTY buffer and block a clean shutdown.
+    quit_deadline = time.monotonic() + 8
+    while process.poll() is None and time.monotonic() < quit_deadline:
+        pump(min(0.25, max(0.0, quit_deadline - time.monotonic())))
     try:
-        process.wait(timeout=8)
+        process.wait(timeout=0.1)
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=5)
