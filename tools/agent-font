@@ -1,0 +1,452 @@
+#!/usr/bin/env python3
+"""agent-font: switch Ghostty font-family by editing only a marked block."""
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+from datetime import datetime
+from pathlib import Path
+
+BEGIN = "# >>> agent-font managed block >>>"
+END = "# <<< agent-font managed block <<<"
+GHOSTTY = "/Applications/Ghostty.app/Contents/MacOS/ghostty"
+MAPLE = "Maple Mono NF CN"
+KEYS = ("font-family", "font-family-bold", "font-family-italic", "font-family-bold-italic")
+COMMON = {x.casefold() for x in (
+    "Maple Mono NF CN", "Maple Mono NF", "Maple Mono", "JetBrains Mono", "JetBrains Mono NL",
+    "Menlo", "Monaco", "SF Mono", "Fira Code", "Hack", "Cascadia Code", "Source Code Pro",
+    "IBM Plex Mono", "Iosevka", "MesloLGS NF", "Meslo LG S", "Roboto Mono", "Victor Mono",
+    "Geist Mono", "Commit Mono", "PT Mono", "Andale Mono", "Courier New", "Consolas",
+    "DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Ubuntu Mono",
+)}
+
+
+class ToolError(Exception):
+    pass
+
+
+def parse_args(argv):
+    opts = {"config": None, "ghostty": None, "backup_dir": None, "all": False, "help": False}
+    pos, i = [], 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--":
+            pos += argv[i + 1:]
+            break
+        if arg in ("-h", "--help"):
+            opts["help"] = True
+        elif arg == "--all":
+            opts["all"] = True
+        elif arg.startswith("--") and "=" in arg:
+            key, value = arg[2:].split("=", 1)
+            if key not in ("config", "ghostty", "backup-dir"):
+                raise ToolError("未知选项：" + arg)
+            opts[key.replace("-", "_")] = value
+        elif arg in ("--config", "--ghostty", "--backup-dir"):
+            if i + 1 == len(argv):
+                raise ToolError(arg + " 缺少参数")
+            opts[arg[2:].replace("-", "_")] = argv[i + 1]
+            i += 1
+        elif arg.startswith("-"):
+            raise ToolError("未知选项：" + arg)
+        else:
+            pos.append(arg)
+        i += 1
+    return opts, pos
+
+
+def help_text():
+    return """agent-font — Ghostty 字体切换（只改带 marker 的管理块）
+
+用法:
+  agent-font                    TTY 菜单；非 TTY 帮助 + 当前配置
+  agent-font list [--all]       已安装的常用等宽字体 / 全部 family
+  agent-font maple              切换到 Maple Mono NF CN
+  agent-font set "Family Name"  切换到已安装的字体
+  agent-font default            删除管理块，恢复原字体（restore 同义）
+
+选项:
+  --config PATH       默认 Mac: ~/Library/Application Support/com.mitchellh.ghostty/config.ghostty
+  --ghostty PATH      默认 /Applications/Ghostty.app/Contents/MacOS/ghostty
+  --backup-dir PATH   默认当前用户的应用数据目录（agent-font/backups）
+
+成功后 Mac 按 ⌘⇧, 刷新（Ghostty 默认 reload_config）。
+"""
+
+
+def config_path(explicit):
+    if explicit:
+        return Path(explicit).expanduser()
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "ghostty"
+    if sys.platform == "darwin":
+        base = Path.home() / "Library/Application Support/com.mitchellh.ghostty"
+        candidates = [base / "config.ghostty", base / "config",
+                      xdg / "config", xdg / "config.ghostty"]
+    else:
+        candidates = [xdg / "config", xdg / "config.ghostty"]
+    found = [p for p in candidates if p.exists()]
+    if len(found) > 1:
+        raise ToolError("发现多个 Ghostty 配置来源，无法确定覆盖关系：\n  " +
+                        "\n  ".join(map(str, found)) + "\n请用 --config 指定真正生效的文件。")
+    return found[0] if found else candidates[0]
+
+
+def config_target(explicit):
+    path = config_path(explicit)
+    if not path.exists():
+        raise ToolError("配置文件不存在：" + str(path))
+    if not path.is_file():
+        raise ToolError("配置路径不是文件：" + str(path))
+    return path.resolve(strict=True)
+
+
+def read_text(path):
+    with open(path, encoding="utf-8", errors="surrogateescape", newline="") as handle:
+        return handle.read()
+
+
+def atomic_write(path, text, mode, uid=None, gid=None):
+    fd, tmp = tempfile.mkstemp(prefix=".agent-font-", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape", newline="") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, mode)
+        if uid is not None:
+            try:
+                os.chown(tmp, uid, gid)
+            except (PermissionError, AttributeError):
+                pass
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def key_value(line):
+    text = line.strip()
+    if not text or text.startswith("#") or "=" not in text:
+        return None
+    key, value = text.split("=", 1)
+    return key.strip(), value.strip()
+
+
+def parse_value(raw):
+    text = raw.strip()
+    if not text.startswith('"'):
+        return text.split("#", 1)[0].strip()
+    result, escaped = [], False
+    for char in text[1:]:
+        if escaped:
+            result.append({"n": "\n", "r": "\r", "t": "\t"}.get(char, char))
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == '"':
+            return "".join(result)
+        else:
+            result.append(char)
+    return "".join(result)
+
+
+def block_range(lines):
+    begins = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == BEGIN]
+    ends = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == END]
+    if not begins and not ends:
+        return None
+    if len(begins) != 1 or len(ends) != 1 or begins[0] > ends[0]:
+        raise ToolError("agent-font 管理块标记不完整或重复，拒绝修改。")
+    return begins[0], ends[0]
+
+
+def effective_fonts(text):
+    fonts = []
+    for line in text.splitlines():
+        item = key_value(line)
+        if item and item[0] == "font-family":
+            value = parse_value(item[1])
+            if value:
+                fonts.append(value)
+            else:
+                fonts = []
+    return fonts
+
+
+def quote(value):
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def check_family(name):
+    if any(ord(char) < 32 or 0x7f <= ord(char) <= 0x9f or char in "\u2028\u2029" for char in name):
+        raise ToolError("字体名包含控制符或换行，拒绝写入。")
+    name = name.strip()
+    if not name:
+        raise ToolError("字体名不能为空。")
+    return name
+
+
+def apply_family(text, family):
+    lines = text.splitlines(keepends=True)
+    newline = "\r\n" if "\r\n" in text else "\n"
+    current = block_range(lines)
+    clears = set()
+    for i, line in enumerate(lines):
+        if current and current[0] <= i <= current[1]:
+            continue
+        item = key_value(line)
+        if not item:
+            continue
+        key, value = item
+        if key == "config-file":
+            raise ToolError("配置含有 config-file 嵌套，无法保证字体覆盖关系；请手动处理包含关系后重试。")
+        if key in KEYS[1:] and parse_value(value):
+            clears.add(key)
+    if current:
+        for line in lines[current[1] + 1:]:
+            item = key_value(line)
+            if item and item[0] in KEYS:
+                raise ToolError("管理块之后仍有 font-family 设置，无法保证覆盖；请先手动调整后重试。")
+    block = [BEGIN + newline, 'font-family = ""' + newline,
+             "font-family = " + quote(family) + newline]
+    block += [key + ' = ""' + newline for key in KEYS[1:] if key in clears]
+    block.append(END + newline)
+    if current:
+        old = lines[current[0]:current[1] + 1]
+        if current[1] == len(lines) - 1 and not old[-1].endswith(("\n", "\r")):
+            block[-1] = block[-1].rstrip("\r\n")
+        return "".join(lines[:current[0]] + block + lines[current[1] + 1:])
+    if not lines:
+        return "".join(block)
+    if not lines[-1].endswith(("\n", "\r")):
+        text += newline
+    return text + "".join(block)
+
+
+def remove_block(text):
+    lines = text.splitlines(keepends=True)
+    current = block_range(lines)
+    if current is None:
+        return None
+    return "".join(lines[:current[0]] + lines[current[1] + 1:])
+
+
+def resolve_ghostty(explicit):
+    raw = explicit or (GHOSTTY if sys.platform == "darwin" else "ghostty")
+    path = Path(raw).expanduser()
+    if os.sep in raw or raw.startswith("~"):
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    else:
+        found = shutil.which(raw)
+        if found:
+            return found
+    raise ToolError(f"未找到 Ghostty CLI：{raw}\n字体由显示终端负责，SSH远端不能替Mac换字体。\n未修改任何文件。")
+
+
+def clean_stderr(text):
+    noise = ("error: SentryInitFailed", "error: SentryInitFailed.")
+    return "\n".join(line for line in text.splitlines() if line.strip() not in noise).strip()
+
+
+def invoke(ghostty, args):
+    try:
+        return subprocess.run([ghostty, *args], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ToolError("执行 Ghostty CLI 失败：" + str(exc))
+
+
+def families(ghostty):
+    proc = invoke(ghostty, ["+list-fonts"])
+    if proc.returncode != 0:
+        detail = clean_stderr(proc.stderr) or clean_stderr(proc.stdout) or f"退出码 {proc.returncode}"
+        raise ToolError("+list-fonts 失败：" + detail)
+    result = []
+    for line in proc.stdout.splitlines():
+        if not line.strip() or line[0].isspace() or line.strip() == "error: SentryInitFailed":
+            continue
+        name = line.strip()
+        if name not in result:
+            result.append(name)
+    return result
+
+
+def validate(ghostty, path):
+    proc = invoke(ghostty, ["+validate-config", f"--config-file={path}"])
+    if proc.returncode == 0:
+        return
+    detail = clean_stderr(proc.stderr) or clean_stderr(proc.stdout) or f"退出码 {proc.returncode}"
+    raise ToolError("+validate-config 失败：" + detail)
+
+
+def default_backup_dir():
+    if sys.platform == "darwin":
+        return Path.home() / "Library/Application Support/agent-font/backups"
+    state = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state")))
+    return state / "agent-font/backups"
+
+
+def backup_file(path, root):
+    root = Path(root).expanduser() if root else default_backup_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest, number = root / stamp, 1
+    while True:
+        try:
+            dest.mkdir()
+            break
+        except FileExistsError:
+            dest, number = root / f"{stamp}-{number}", number + 1
+    shutil.copy2(path, dest / path.name)
+    return dest
+
+
+def commit(path, new_text, original, ghostty, backup_root):
+    info = os.stat(path)
+    mode, uid, gid = stat.S_IMODE(info.st_mode), info.st_uid, info.st_gid
+    backup = backup_file(path, backup_root)
+    atomic_write(path, new_text, mode, uid, gid)
+    try:
+        validate(ghostty, path)
+    except ToolError as exc:
+        try:
+            atomic_write(path, original, mode, uid, gid)
+        except OSError as rollback_error:
+            raise ToolError(f"{exc}\n回滚失败：{rollback_error}\n原配置备份：{backup}")
+        raise ToolError(f"{exc}\n本次修改已回滚。原配置备份：{backup}")
+    return backup
+
+
+def switch(family, config, ghostty, backup_root):
+    family = check_family(family)
+    ghostty = resolve_ghostty(ghostty)
+    installed = families(ghostty)
+    canonical = next((name for name in installed if name == family), None)
+    if canonical is None:
+        canonical = next((name for name in installed if name.casefold() == family.casefold()), None)
+    if canonical is None:
+        raise ToolError(f"字体未安装：{family}\n未修改任何文件。先安装字体，或用 `agent-font list --all` 查看可用 family。")
+    path = config_target(config)
+    original = read_text(path)
+    updated = apply_family(original, canonical)
+    if updated == original:
+        print(f"已是当前字体：{canonical}\n未修改文件。")
+        return 0
+    backup = commit(path, updated, original, ghostty, backup_root)
+    print(f"已设置字体：{canonical}\n配置：{path}\n备份：{backup}")
+    print("Mac 上按 ⌘⇧, 刷新 Ghostty 配置（默认 reload_config）。")
+    return 0
+
+
+def default_font(config, ghostty, backup_root):
+    path = config_target(config)
+    original = read_text(path)
+    updated = remove_block(original)
+    if updated is None:
+        print("没有 agent-font 管理块，未修改文件。")
+        return 0
+    ghostty = resolve_ghostty(ghostty)
+    backup = commit(path, updated, original, ghostty, backup_root)
+    print(f"已删除 agent-font 管理块，恢复原字体设置。\n配置：{path}\n备份：{backup}")
+    print("Mac 上按 ⌘⇧, 刷新 Ghostty 配置（默认 reload_config）。")
+    return 0
+
+
+def list_fonts(all_fonts, ghostty):
+    ghostty = resolve_ghostty(ghostty)
+    installed = families(ghostty)
+    found = installed if all_fonts else [name for name in installed if name.casefold() in COMMON]
+    for name in found:
+        print(name)
+    if not found and not all_fonts:
+        print("未找到常用等宽字体；可用 `agent-font list --all` 查看全部 family。", file=sys.stderr)
+    return 0
+
+
+def print_current(config):
+    try:
+        path = config_path(config)
+        if not path.exists():
+            print(f"配置文件：未找到（{path}）")
+            return
+        text = read_text(path.resolve(strict=True))
+        fonts = effective_fonts(text)
+        print(f"配置文件：{path}")
+        print("当前字体：" + (", ".join(fonts) if fonts else "未设置（Ghostty 默认）"))
+        print("管理块：" + ("已启用" if block_range(text.splitlines(keepends=True)) else "未启用"))
+    except ToolError as exc:
+        print("配置状态：" + str(exc))
+
+
+def menu(config, ghostty, backup_root):
+    ghostty = resolve_ghostty(ghostty)
+    installed = families(ghostty)
+    choices = [name for name in installed if name.casefold() in COMMON]
+    print_current(config)
+    if not choices:
+        print("未找到常用等宽字体；可用 `agent-font list --all` 查看全部 family。")
+        return 0
+    print("\n已安装的常用等宽字体：")
+    for index, name in enumerate(choices, 1):
+        print(f"  {index}) {name}")
+    while True:
+        try:
+            raw = input("选择编号（q 退出）：").strip()
+        except EOFError:
+            print()
+            return 0
+        if raw.lower() in ("q", "quit", ""):
+            return 0
+        if raw.isdigit() and 1 <= int(raw) <= len(choices):
+            return switch(choices[int(raw) - 1], config, ghostty, backup_root)
+        print("请输入有效编号，或 q 退出。")
+
+
+def main(argv=None):
+    try:
+        opts, pos = parse_args(list(sys.argv[1:] if argv is None else argv))
+        if opts["help"]:
+            print(help_text())
+            return 0
+        backup_root = (Path(opts["backup_dir"]).expanduser() if opts["backup_dir"]
+                       else default_backup_dir())
+        command = pos[0] if pos else None
+        if command is None:
+            if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                print(help_text())
+                print_current(opts["config"])
+                return 0
+            return menu(opts["config"], opts["ghostty"], backup_root)
+        if command == "list":
+            if len(pos) != 1:
+                raise ToolError("用法：agent-font list [--all]")
+            return list_fonts(opts["all"], opts["ghostty"])
+        if command == "maple":
+            if len(pos) != 1:
+                raise ToolError("用法：agent-font maple")
+            return switch(MAPLE, opts["config"], opts["ghostty"], backup_root)
+        if command == "set":
+            if len(pos) != 2:
+                raise ToolError('用法：agent-font set "Family Name"')
+            return switch(pos[1], opts["config"], opts["ghostty"], backup_root)
+        if command in ("default", "restore"):
+            if len(pos) != 1:
+                raise ToolError(f"用法：agent-font {command}")
+            return default_font(opts["config"], opts["ghostty"], backup_root)
+        raise ToolError(f"未知命令：{command}\n\n{help_text()}")
+    except ToolError as exc:
+        print("agent-font: " + str(exc), file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\n已取消", file=sys.stderr)
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

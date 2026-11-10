@@ -1,0 +1,12 @@
+node_modules/
+artifacts/
+__pycache__/
+*.py[cod]
+*.tgz
+*.tar.gz
+.DS_Store
+.env
+.env.*
+proof*.json
+*TASK.md
+delegation.json

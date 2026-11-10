@@ -1,0 +1,61 @@
+{
+  "name": "pi-native-status",
+  "version": "0.4.1",
+  "private": true,
+  "type": "module",
+  "description": "A compact native Pi status bar with host resources and measured request performance.",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "files": [
+    "index.ts",
+    "render.ts",
+    "metrics.ts",
+    "resources.ts",
+    "tools/agent-font",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "docs/"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test:fonts": "python3 -m unittest discover -s tools/tests -v",
+    "test:smoke": "python3 test/pty-smoke.py",
+    "preview": "node --experimental-strip-types test/render-preview.ts"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@earendil-works/pi-tui": "1.5.0",
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3"
+  },
+  "author": "Roundly",
+  "license": "MIT",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "terminal",
+    "status-bar",
+    "ttft"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Roundly/pi-native-status.git"
+  },
+  "homepage": "https://github.com/Roundly/pi-native-status#readme",
+  "bugs": {
+    "url": "https://github.com/Roundly/pi-native-status/issues"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  }
+}
