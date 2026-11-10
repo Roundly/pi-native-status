@@ -1,5 +1,5 @@
 /**
- * v0.4.1 compact visual layer for the native Pi status bar.
+ * v0.4.2 compact visual layer for the native Pi status bar.
  *
  * One header line (CPU/RAM left, host right) and two footer lines: cwd/branch
  * plus the single model identity, then compact throughput/TTFT/cache with the
@@ -99,16 +99,18 @@ export function nearestPaletteIndex(hex: string): number {
 
 /** Adapt the active Pi theme without forcing terminal colours or a page band. */
 export function styleFromTheme(theme: Theme): Style {
+  // Pi swaps the theme instance behind a stable proxy, so the adapter must read
+  // appearance and colour mode per paint instead of capturing them at creation.
   const colors = new Map<string, ReturnType<typeof parseColor>>();
-  const mode = theme.getColorMode();
   const color = (hex: string) => {
-    const cached = colors.get(hex);
+    const mode = theme.getColorMode();
+    const key = `${mode}:${hex}`;
+    const cached = colors.get(key);
     if (cached) return cached;
     const parsed = mode === "256color" ? parseColor(nearestPaletteIndex(hex)) : parseColor(hex);
-    colors.set(hex, parsed);
+    colors.set(key, parsed);
     return parsed;
   };
-  const emphasisColor = theme.appearance === "light" ? PALETTE.coolLight : PALETTE.cool;
   const paintText = (text: string, options: PaintOptions) =>
     theme.style(text, {
       fg: options.fg ? color(options.fg) : undefined,
@@ -120,7 +122,8 @@ export function styleFromTheme(theme: Theme): Style {
     fg: (token, text) => theme.fg(token as Parameters<Theme["fg"]>[0], text),
     bold: (text) => theme.bold(text),
     paint: paintText,
-    emphasis: (text) => paintText(text, { fg: emphasisColor }),
+    emphasis: (text) =>
+      paintText(text, { fg: theme.appearance === "light" ? PALETTE.coolLight : PALETTE.cool }),
   };
 }
 
@@ -146,11 +149,25 @@ export function formatBytes(value: number | null | undefined): string {
   return `${gib >= 10 ? Math.round(gib) : gib.toFixed(1)}GiB`;
 }
 
-/** RAM shown in the compact reference form: 43G, 7.5G. */
+const RAM_UNITS = ["G", "T", "P", "E"] as const;
+
+/** RAM shown in the compact reference form: 43G, 7.5G, 1.0T. */
 export function formatRam(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "—";
-  const gib = value / 1024 ** 3;
-  return `${gib >= 10 ? Math.round(gib) : gib.toFixed(1)}G`;
+  let magnitude = value / 1024 ** 3;
+  let unit = 0;
+  for (;;) {
+    const tenths = Math.round(magnitude * 10) / 10;
+    // 9.96G rounds to 10G rather than a fifth column ("10.0G").
+    const rounded = tenths >= 10 ? Math.round(magnitude) : tenths;
+    if (rounded < 1000 || unit === RAM_UNITS.length - 1) {
+      const text = tenths >= 10 ? `${Math.round(magnitude)}` : `${tenths.toFixed(1)}`;
+      return `${text}${RAM_UNITS[unit]}`;
+    }
+    // 999.6G rounds to 1000G; carry the unit instead of adding a fifth cell.
+    magnitude /= 1024;
+    unit += 1;
+  }
 }
 
 /** Cache hit is this request's prompt cache ratio, never a session total. */
@@ -163,16 +180,46 @@ export function formatCacheHit(ratio: number | null | undefined): string {
   return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(1)}%`;
 }
 
+/** Keep seconds precise while they fit; compact exceptionally long durations. */
 export function formatTtft(ttftMs: number | null | undefined): string {
   if (typeof ttftMs !== "number" || !Number.isFinite(ttftMs) || ttftMs < 0) return "—";
-  return `${(ttftMs / 1000).toFixed(1)}s`;
+  const seconds = ttftMs / 1000;
+  const tenths = Math.round(seconds * 10) / 10;
+  if (tenths < 100) return `${tenths.toFixed(1)}s`;
+  const units = [[1, "s"], [60, "m"], [3600, "h"], [86400, "d"]] as const;
+  for (const [scale, suffix] of units) {
+    const rounded = Math.round(seconds / scale);
+    if (rounded < 10_000 || suffix === "d") return `${rounded}${suffix}`;
+  }
+  return "—";
+}
+
+const RATE_UNITS = ["k", "M", "B", "T", "P", "E"] as const;
+
+function compactRate(value: number): string {
+  let magnitude = value;
+  let unit = -1;
+  while (magnitude >= 1000 && unit < RATE_UNITS.length - 1) {
+    magnitude /= 1000;
+    unit += 1;
+  }
+  if (unit < 0) return String(Math.round(value));
+  if (magnitude >= 1000) return value.toExponential(1);
+  const tenths = Math.round(magnitude * 10) / 10;
+  const text = tenths >= 10 ? `${Math.round(magnitude)}` : `${tenths.toFixed(1)}`;
+  return `${text}${RATE_UNITS[unit]}`;
 }
 
 export function formatThroughput(tokensPerSecond: number | null | undefined): string {
   if (typeof tokensPerSecond !== "number" || !Number.isFinite(tokensPerSecond) || tokensPerSecond < 0) {
     return "—";
   }
-  return tokensPerSecond >= 100 ? String(Math.round(tokensPerSecond)) : tokensPerSecond.toFixed(1);
+  if (tokensPerSecond < 100) {
+    const tenths = Math.round(tokensPerSecond * 10) / 10;
+    // 99.96 rounds to 100, which stays a complete integer instead of "100.0".
+    return tenths >= 100 ? "100" : tenths.toFixed(1);
+  }
+  return compactRate(tokensPerSecond);
 }
 
 export function formatContextPercent(percent: number | null | undefined): string | null {
@@ -213,6 +260,44 @@ function truncateMiddle(text: string, maxWidth: number): string {
     else if (keepRight > 1) keepRight -= 1;
     else return "…";
   }
+}
+
+/**
+ * Keep the project's leaf directory recognisable: the basename gets the budget
+ * first, then a little leading context, and only then is the basename itself
+ * shortened in the middle. Never wider than `width`.
+ */
+function formatPath(display: string, maxWidth: number): string {
+  const width = Math.max(0, Math.floor(maxWidth));
+  if (width === 0) return "";
+  if (visibleWidth(display) <= width) return display;
+  const parts = display.split(sep).filter((part, index) => !(index === 0 && part === ""));
+  const base = parts.length > 1 ? parts[parts.length - 1] : "";
+  if (!base) return truncateMiddle(display, width);
+  const prefix = parts.slice(0, -1).join(sep);
+  const baseWidth = visibleWidth(base);
+  if (baseWidth >= width - 2) {
+    // Reserve a two-cell prefix ("~…") so the location still reads as a path.
+    const prefixBudget = Math.min(2, Math.max(0, width - 3));
+    const shownBase = truncateMiddle(base, width - prefixBudget - 1);
+    const shownPrefix = prefix ? truncateToWidth(prefix, prefixBudget, "…") : "";
+    const separator = shownPrefix ? sep : "";
+    return truncateToWidth(`${shownPrefix}${separator}${shownBase}`, width, "…");
+  }
+  const prefixBudget = width - baseWidth - 1;
+  if (!prefix || prefixBudget < 1) return base;
+  const shownPrefix = truncateToWidth(prefix, prefixBudget, "…");
+  return `${shownPrefix}${sep}${base}`;
+}
+
+/** Keep parentheses paired whenever the branch is shown at all. */
+function formatBranch(branch: string, maxWidth: number): string {
+  const width = Math.max(0, Math.floor(maxWidth));
+  const text = `(${branch})`;
+  if (!branch || width < 3) return "";
+  if (visibleWidth(text) <= width) return text;
+  const inner = truncateToWidth(branch, width - 2, "…");
+  return `(${inner})`;
 }
 
 function percentLabel(ratio: number | null | undefined): string {
@@ -298,14 +383,17 @@ export function buildHeaderLines(view: HeaderView, width: number, style: Style):
   const padding = layoutPadding(safeWidth);
   const innerWidth = Math.max(1, safeWidth - padding * 2);
   const cpu = fitField(percentLabel(view.resources?.cpuRatio ?? null), 4);
-  const ram = fitField(formatRam(view.resources?.memoryUsedBytes ?? null), 4);
+  const ramText = formatRam(view.resources?.memoryUsedBytes ?? null);
+  const ramWidth = Math.max(4, visibleWidth(ramText));
+  const ram = fitField(ramText, ramWidth);
   const left =
     style.fg("muted", "CPU ") +
     style.fg("muted", cpu) +
     style.fg("muted", " / ") +
     style.fg("muted", "RAM ") +
     style.fg("muted", ram);
-  const leftWidth = 19;
+  // Host placement follows the real left block: no fixed 19-cell assumption.
+  const leftWidth = visibleWidth(left);
   const host = sanitizeText(view.host ?? "") || "unknown";
   const hostBudget = innerWidth - leftWidth - 2;
   const hostText = hostBudget >= 4 ? truncateToWidth(host, hostBudget, "…") : "";
@@ -393,14 +481,20 @@ function locationLine(view: FooterView, width: number, style: Style): string {
   const rightWidth = right ? visibleWidth(right) : 0;
   const leftWidth = Math.max(0, innerWidth - rightWidth - (right ? 2 : 0));
 
-  const branchText = branch ? ` (${branch})` : "";
-  const branchBudget = Math.max(0, leftWidth - (leftWidth >= 20 ? 10 : 6));
-  const branchDisplay = branchText && branchBudget >= 3
-    ? truncateToWidth(branchText, branchBudget, "…")
-    : "";
-  const pathWidth = Math.max(1, leftWidth - visibleWidth(branchDisplay));
-  const path = truncateMiddle(cwd, pathWidth);
-  const left = style.fg("dim", path) + style.fg("muted", branchDisplay);
+  const branchText = branch;
+  const pathDesired = Math.min(visibleWidth(cwd), leftWidth);
+  // Reserve a recognisable path first (basename + short prefix), then branch.
+  const pathFloor = Math.min(
+    pathDesired,
+    Math.max(Math.floor(leftWidth * 0.6), Math.min(16, Math.max(0, leftWidth - 3))),
+  );
+  const branchNatural = branchText ? visibleWidth(branchText) + 2 : 0;
+  const branchBudget = Math.min(branchNatural, Math.max(0, leftWidth - pathFloor - (branchText ? 1 : 0)));
+  const branchDisplay = formatBranch(branchText, branchBudget);
+  const branchPart = branchDisplay ? ` ${branchDisplay}` : "";
+  const pathWidth = Math.max(1, leftWidth - visibleWidth(branchPart));
+  const path = formatPath(cwd, pathWidth);
+  const left = style.fg("dim", path) + style.fg("muted", branchPart);
   const gap = right ? Math.max(2, innerWidth - visibleWidth(left) - rightWidth) : 0;
   return insetLine(`${left}${" ".repeat(gap)}${right ?? ""}`, safeWidth);
 }
@@ -426,11 +520,13 @@ function statsLine(view: FooterView, width: number, style: Style): string {
   const throughput = metrics?.tokensPerSecond;
   const measured =
     showTiming && typeof throughput === "number" && Number.isFinite(throughput) && throughput >= 0;
-  const tpsValue = fitField(measured ? formatThroughput(throughput) : "—", 4, "right");
+  const tpsText = measured ? formatThroughput(throughput) : "—";
+  const tpsValue = fitField(tpsText, Math.max(4, visibleWidth(tpsText)), "right");
   const tps = (measured ? style.emphasis(tpsValue) : style.fg("muted", tpsValue)) +
     style.fg("muted", " tok/s");
+  const ttftText = showTiming ? formatTtft(metrics?.ttftMs) : "—";
   const ttft = style.fg("muted", "TTFT ") +
-    style.fg("text", fitField(showTiming ? formatTtft(metrics?.ttftMs) : "—", 5));
+    style.fg("text", fitField(ttftText, Math.max(5, visibleWidth(ttftText))));
   const cacheGroup = style.fg("muted", "缓存 ") +
     style.fg("text", fitField(formatCacheHit(cache), 5));
   const context = style.fg("muted", "上下文 ") + style.fg("text", contextPercentText(view));

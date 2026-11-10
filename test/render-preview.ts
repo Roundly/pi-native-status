@@ -1,5 +1,5 @@
 /**
- * Reproducible v0.4.1 compact previews from the real builders.
+ * Reproducible v0.4.2 compact previews from the real builders.
  *
  * One header line plus two footer lines, with clearly mock data and truecolor
  * ANSI. Writes normal, long-content, busy and light-theme states under artifacts/.

@@ -14,9 +14,9 @@ A compact native status bar for Pi: host resources on one header line, and locat
 
 ## 特点
 
-- **轻量布局**：1 行 header（CPU / RAM / 主机名）+ 2 行 footer（cwd / 分支 / 模型 / thinking / 性能指标）。
+- **轻量布局**：1 行 header（CPU / RAM / 主机名）+ 主体 2 行 footer（cwd / 分支 / 模型 / thinking / 性能指标）。其他扩展提供非空状态时，另加 1 行低权重状态，保留扩展间的兼容性。
 - **模型只显示一次**：模型名加粗；实测 TPS 使用灰青色强调；辅助项使用 muted 颜色，不抢内容注意力。
-- **本次请求的指标**：生成速度（TPS，tokens/s）、首字延迟（TTFT）、缓存命中率与上下文占用集中在一行。
+- **请求指标**：生成速度（TPS，tokens/s）、首字延迟（TTFT）、缓存命中率与上下文占用集中在一行。最近一次已完成请求的性能保留至新请求开始。
 - **深浅主题自适应**：跟随 Pi 当前主题与浅色/深色外观。
 - **窄终端安全截断**：在 40 / 60 / 80 / 120 / 160 列宽度下都不会溢出，路径中间省略、分支与模型尾部省略。
 - **次要信息按需查看**：累计 tokens、provider、完整 RAM、TTFT 与速度等通过 `/native-status details` 查看。
@@ -27,8 +27,10 @@ A compact native status bar for Pi: host resources on one header line, and locat
 要求 Pi 1.5.0（已在 macOS 与 Linux 验证）、Node.js >= 22.19。运行时 SDK 由 Pi 提供，插件通过 `peerDependencies: "*"` 使用；没有运行时第三方依赖，也没有安装 hooks。
 
 ```bash
-pi install git:github.com/Roundly/pi-native-status@v0.4.1
+pi install git:github.com/Roundly/pi-native-status@v0.4.2
 ```
+
+通过 Git 安装过旧版的用户，重新执行上面的安装命令即可更新到 `v0.4.2`，随后执行 `/reload`。手动复制安装的迁移方式见下方“避免重复加载”。
 
 安装后在 Pi 中执行：
 
@@ -57,7 +59,7 @@ pi install git:github.com/Roundly/pi-native-status@v0.4.1
 使用与安装时相同的 source 卸载：
 
 ```bash
-pi remove git:github.com/Roundly/pi-native-status@v0.4.1
+pi remove git:github.com/Roundly/pi-native-status@v0.4.2
 ```
 
 ### 避免重复加载
@@ -77,8 +79,9 @@ pi remove git:github.com/Roundly/pi-native-status@v0.4.1
 
 补充行为：
 
+- 最近一次已完成请求的 TTFT / TPS / 缓存会保留至新请求开始，表示上次请求的观测结果；CPU / RAM 与上下文用量仍按当前状态显示。
 - 新请求开始或请求失败时，会清除上一次的成功计时，避免把旧数字当作当前结果。
-- 恢复历史会话时不会伪造 TTFT / TPS；只有当前会话中真实发生的请求才会产生这些数字。
+- 恢复历史会话时，缓存率从当前会话分支最近的有效请求恢复；不会恢复或伪造 TTFT / TPS，只有当前运行中真实发生的请求才会产生这些计时数字。
 - 额度（5h / 7d 等）没有可靠数据源时不展示。
 - TUI 启动时采样，之后约每秒采样一次，重绘节流为 200 ms；RPC、print、json 模式不启动 UI 或计时器。
 
@@ -93,8 +96,8 @@ pi remove git:github.com/Roundly/pi-native-status@v0.4.1
 ```bash
 npm ci
 npm run typecheck
-npm test            # 44 个单元/渲染测试
-npm run test:fonts  # 11 个字体工具测试，需要 Python 3
+npm test            # 单元与渲染测试
+npm run test:fonts  # 字体工具测试，需要 Python 3
 npm run test:smoke  # 离线 PTY 冒烟测试，使用隔离的 mock provider，不产生费用
 npm run preview     # 生成终端预览
 ```
@@ -104,7 +107,8 @@ npm run preview     # 生成终端预览
 ## 兼容性
 
 - Pi 1.5.0：已在 macOS 与 Linux 验证。
-- Node.js >= 22.19；测试使用 Node.js 24。
+- Node.js >= 22.19；日常开发测试使用 Node.js 24。
+- CI 配置覆盖 Ubuntu / Node.js 22.19.0、Ubuntu / Node.js 24、macOS / Node.js 24，运行类型检查、单元测试、字体工具测试与离线 PTY 冒烟测试。
 - Python 3：仅用于可选的字体工具测试与离线 PTY 冒烟测试。
 
 ## 许可证

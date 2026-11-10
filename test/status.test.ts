@@ -119,6 +119,7 @@ function fakeContext(
   mode: "tui" | "rpc" | "print" | "json" = "tui",
   options: {
     entries?: unknown[];
+    branch?: unknown[];
     usage?: { tokens: number | null; contextWindow: number; percent: number | null };
   } = {},
 ) {
@@ -147,7 +148,7 @@ function fakeContext(
     },
     sessionManager: {
       getEntries: () => options.entries ?? [],
-      getBranch: () => options.entries ?? [],
+      getBranch: () => options.branch ?? options.entries ?? [],
     },
     getContextUsage: () => options.usage,
   };
@@ -518,6 +519,53 @@ test("a resumed session shows its last usage cache but no restored timing", asyn
   assert.match(text, /TTFT —/);
   assert.match(text, /— tok\/s/);
   assert.doesNotMatch(text, /↑|↓|128k/);
+});
+
+test("restored cache comes from the active branch while totals stay session-wide", async () => {
+  const harness = setup();
+  const active = {
+    type: "message",
+    message: assistantMessage({ input: 1000, cacheRead: 9000, cacheWrite: 0, output: 100 }),
+  };
+  const otherBranch = {
+    type: "message",
+    message: assistantMessage({ input: 100, cacheRead: 25, cacheWrite: 0, output: 10 }),
+  };
+  const session = fakeContext("tui", {
+    usage: { tokens: 10000, contextWindow: 128000, percent: 7.8 },
+    // The sibling branch is later in the session file and must not win.
+    entries: [active, otherBranch],
+    branch: [active],
+  });
+  await harness.pi.emit("session_start", { type: "session_start", reason: "resume" }, session.ctx);
+  const footer = plain(harness.components(session).footer());
+  assert.match(footer, /缓存 90%/);
+  assert.doesNotMatch(footer, /缓存 20%/);
+
+  await harness.pi.commands.get("native-status")!.handler("details", session.commandCtx);
+  const details = session.calls.notifications.at(-1) ?? "";
+  assert.match(details, /缓存: 90%/);
+  assert.match(details, /累计: ↑1\.1k ↓110/);
+});
+
+test("active branch without usage does not borrow another branch's cache", async () => {
+  const harness = setup();
+  const otherBranch = {
+    type: "message",
+    message: assistantMessage({ input: 100, cacheRead: 25, cacheWrite: 0, output: 10 }),
+  };
+  const session = fakeContext("tui", {
+    usage: { tokens: 10000, contextWindow: 128000, percent: 7.8 },
+    entries: [otherBranch],
+    branch: [{ type: "message", message: { role: "user", content: "hi" } }],
+  });
+  await harness.pi.emit("session_start", { type: "session_start", reason: "resume" }, session.ctx);
+  assert.match(plain(harness.components(session).footer()), /缓存 —/);
+
+  await harness.pi.commands.get("native-status")!.handler("details", session.commandCtx);
+  const details = session.calls.notifications.at(-1) ?? "";
+  assert.match(details, /缓存: —/);
+  assert.match(details, /累计: ↑100 ↓10/);
 });
 
 test("compaction leaves context tokens unknown until the next response", async () => {

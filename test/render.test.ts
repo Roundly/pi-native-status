@@ -131,6 +131,58 @@ test("token, byte, cache, TTFT and throughput formatting keep unknown values unk
   assert.equal(formatThroughput(null), "—");
 });
 
+test("numeric fields keep their unit and value across carry and large magnitudes", () => {
+  const g = 1024 ** 3;
+  assert.equal(formatRam(9.94 * g), "9.9G");
+  assert.equal(formatRam(9.95 * g), "10G");
+  assert.equal(formatRam(9.99 * g), "10G");
+  assert.equal(formatRam(999.4 * g), "999G");
+  assert.equal(formatRam(999.6 * g), "1.0T");
+  assert.equal(formatRam(1024 * g), "1.0T");
+  assert.equal(formatRam(10 * 1024 * g), "10T");
+  assert.equal(formatRam(Number.MAX_SAFE_INTEGER), "8.0P");
+
+  assert.equal(formatThroughput(99.94), "99.9");
+  assert.equal(formatThroughput(99.95), "100");
+  assert.equal(formatThroughput(99.99), "100");
+  assert.equal(formatThroughput(1500), "1.5k");
+  assert.equal(formatThroughput(12_345), "12k");
+  assert.equal(formatThroughput(Number.MAX_VALUE), "1.8e+308");
+
+  assert.equal(formatTtft(1234), "1.2s");
+  assert.equal(formatTtft(59_940), "59.9s");
+  assert.equal(formatTtft(59_960), "60.0s");
+  assert.equal(formatTtft(89_000), "89.0s");
+  assert.equal(formatTtft(90_000), "90.0s");
+  assert.equal(formatTtft(99_960), "100s");
+  assert.equal(formatTtft(123_456), "123s");
+  assert.equal(formatTtft(3_599_000), "3599s");
+  assert.equal(formatTtft(9_999_600), "167m");
+  assert.equal(formatTtft(86_400_000), "1440m");
+  assert.equal(formatTtft(3_600_000_000), "1000h");
+  assert.equal(formatTtft(86_400_000_000), "1000d");
+
+  const wideHeader = plain(buildHeaderLines(
+    { ...header, resources: { ...resources(), cpuRatio: 1, memoryUsedBytes: 999.6 * g } },
+    80,
+    ansiStyle,
+  )).split("\n")[0];
+  assert.match(wideHeader, /CPU 100% \/ RAM 1\.0T/);
+  assert.doesNotMatch(wideHeader, /…/);
+  assert.ok(wideHeader.trimEnd().endsWith("nuc"));
+});
+
+test("carried RAM, large throughput and long TTFT are complete in the footer", () => {
+  const long = new RequestMetrics();
+  long.begin(0, "provider-request");
+  long.firstDelta(123_456, "text", "x");
+  long.finish(243_456, { input: 100, output: 7_200_000 });
+  const text = plain(buildFooterLines(view({ metrics: long.snapshot(), extensionStatuses: [] }), 120, ansiStyle)).split("\n")[1];
+  assert.match(text, /60k tok\/s/);
+  assert.match(text, /TTFT 123s/);
+  assert.doesNotMatch(text, /tok\/s.*…|TTFT[^ ]*…/);
+});
+
 test("custom cool accent uses the xterm grey-teal, never deep blue", () => {
   assert.equal(nearestPaletteIndex(PALETTE.cool), 115);
   assert.notEqual(nearestPaletteIndex(PALETTE.cool), 17);
@@ -185,6 +237,43 @@ test("cwd is home-shortened without leaving the home directory", () => {
   assert.equal(formatCwd("/home/demo/a/b", "/home/demo"), "~/a/b");
   assert.equal(formatCwd("/home/demo", "/home/demo"), "~");
   assert.equal(formatCwd("/tmp/a", "/home/demo"), "/tmp/a");
+});
+
+test("one style adapter follows dark, light and 256-colour theme switches", () => {
+  const sdk = dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent")));
+  const raw = JSON.parse(readFileSync(join(sdk, "modes/interactive/theme/light.json"), "utf8")) as {
+    vars?: Record<string, string>;
+    colors: Record<string, string>;
+  };
+  const resolveColor = (value: string) => raw.vars?.[value] ?? value;
+  const colors = Object.fromEntries(Object.entries(raw.colors).map(([key, value]) => [key, resolveColor(value)]));
+  const light = new Theme(colors as never, colors as never, "truecolor", { appearance: "light" });
+  const light256 = new Theme(colors as never, colors as never, "256color", { appearance: "light" });
+  const dark = themeForMode("truecolor");
+  const holder: { current: Theme } = { current: dark as Theme };
+  const switching = {
+    getColorMode: () => holder.current.getColorMode(),
+    get appearance() {
+      return holder.current.appearance;
+    },
+    fg: (token: string, text: string) => holder.current.fg(token as never, text),
+    bold: (text: string) => holder.current.bold(text),
+    style: (text: string, options: Parameters<Theme["style"]>[1]) => holder.current.style(text, options),
+  } as unknown as Theme;
+  const adapter = styleFromTheme(switching);
+
+  assert.equal(adapter.emphasis("x"), styleFromTheme(themeForMode("truecolor")).emphasis("x"));
+  holder.current = light;
+  assert.equal(adapter.emphasis("x"), styleFromTheme(light).emphasis("x"));
+  assert.notEqual(adapter.emphasis("x"), styleFromTheme(themeForMode("truecolor")).emphasis("x"));
+  holder.current = dark as Theme;
+  assert.equal(adapter.emphasis("x"), styleFromTheme(themeForMode("truecolor")).emphasis("x"));
+
+  holder.current = light256;
+  assert.equal(adapter.emphasis("x"), styleFromTheme(light256).emphasis("x"));
+  assert.match(adapter.emphasis("x"), new RegExp(`38;5;${nearestPaletteIndex(PALETTE.coolLight)}m`));
+  holder.current = dark as Theme;
+  assert.equal(adapter.emphasis("x"), styleFromTheme(themeForMode("truecolor")).emphasis("x"));
 });
 
 test("header is one compact line with stable CPU/RAM fields and host on the right", () => {
@@ -312,6 +401,37 @@ test("extension status adds exactly one optional footer line", () => {
   const lines = buildFooterLines(view({ extensionStatuses: ["build:ok"] }), 80, ansiStyle);
   assert.equal(lines.length, 3);
   assert.match(plain(lines), /build:ok/);
+});
+
+test("long branch keeps paired parens and the project leaf stays recognisable", () => {
+  const longView = view({
+    cwd: "/home/demo/Projects/客户项目/pi-native-status-with-a-very-long-worktree-name",
+    branch: "feature/very-long-branch-name-for-layout",
+    model: { provider: "deepseek", id: "deepseek-v3.2-exp-ultra-long-context-preview" },
+    extensionStatuses: [],
+  });
+  for (const width of [40, 60, 80, 120, 160]) {
+    const lines = plain(buildFooterLines(longView, width, ansiStyle)).split("\n");
+    assert.equal(lines.length, 2);
+    const first = lines[0];
+    assert.match(first, /~/);
+    assert.equal((first.match(/\(/g) ?? []).length, (first.match(/\)/g) ?? []).length);
+    if (width >= 80) assert.match(first, /pi-native/);
+    else assert.match(first, /pi-/);
+    for (const line of lines) assert.ok(visibleWidth(line) <= width, `overflow at ${width}`);
+  }
+  assert.match(plain(buildFooterLines(view({ branch: "main", extensionStatuses: [] }), 40, ansiStyle)), /\(main\)/);
+});
+
+test("every width from 1 to 160 stays within the terminal", () => {
+  for (let width = 1; width <= 160; width += 1) {
+    const headerLines = buildHeaderLines(header, width, ansiStyle);
+    assert.equal(headerLines.length, 1);
+    for (const line of headerLines) assert.ok(visibleWidth(line) <= width, `header overflow at ${width}`);
+    const lines = buildFooterLines(view({ extensionStatuses: ["编译中"] }), width, ansiStyle);
+    assert.equal(lines.length, 3);
+    for (const line of lines) assert.ok(visibleWidth(line) <= width, `footer overflow at ${width}`);
+  }
 });
 
 test("header and footer stay inside 40/60/80/120/160 with CJK, ANSI and hostile labels", () => {

@@ -562,13 +562,13 @@ export class NativeStatusRuntime {
     this.totals.input = 0;
     this.totals.output = 0;
     if (includeHistorical) this.historicalCache = null;
-    let latestCache: number | null = null;
     let entries: unknown[];
     try {
       entries = ctx.sessionManager.getEntries();
     } catch {
       return;
     }
+    // Totals stay session-wide, including usage that lives on other branches.
     for (const raw of entries) {
       if (!raw || typeof raw !== "object") continue;
       const entry = raw as Record<string, unknown>;
@@ -579,14 +579,33 @@ export class NativeStatusRuntime {
       if (entry.type !== "message") continue;
       const message = entry.message;
       if (!message || typeof message !== "object") continue;
-      const usage = readUsage((message as { usage?: unknown }).usage);
-      addUsage(this.totals, usage);
-      if ((message as { role?: unknown }).role === "assistant" && usage) {
-        const prompt = usage.input + usage.cacheRead + usage.cacheWrite;
-        if (prompt > 0) latestCache = usage.cacheRead / prompt;
-      }
+      addUsage(this.totals, readUsage((message as { usage?: unknown }).usage));
     }
-    if (includeHistorical) this.historicalCache = latestCache;
+    if (includeHistorical) this.historicalCache = this.branchCache(ctx);
+  }
+
+  /** Restored cache comes only from the active leaf path, never a sibling branch. */
+  private branchCache(ctx: ExtensionContext): number | null {
+    let branch: unknown[];
+    try {
+      branch = ctx.sessionManager.getBranch();
+    } catch {
+      return null;
+    }
+    let latest: number | null = null;
+    for (const raw of branch) {
+      if (!raw || typeof raw !== "object") continue;
+      const entry = raw as Record<string, unknown>;
+      if (entry.type !== "message") continue;
+      const message = entry.message;
+      if (!message || typeof message !== "object") continue;
+      if ((message as { role?: unknown }).role !== "assistant") continue;
+      const usage = readUsage((message as { usage?: unknown }).usage);
+      if (!usage) continue;
+      const prompt = usage.input + usage.cacheRead + usage.cacheWrite;
+      if (prompt > 0) latest = usage.cacheRead / prompt;
+    }
+    return latest;
   }
 
   private samplerReset(): void {
