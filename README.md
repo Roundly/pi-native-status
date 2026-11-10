@@ -1,8 +1,10 @@
-# pi-native-status
+# Pi CLI 原生状态栏 · pi-native-status
+
+为 Pi Coding Agent 打造的轻量终端状态栏：顶部查看 CPU、内存与主机信息，底部用两行整齐呈现工作目录、Git 分支、模型、上下文占用，以及当前请求的首字延迟（TTFT）、生成速度（TPS）与缓存命中率。支持 macOS 和 Linux，适配深色与浅色主题。
 
 A compact native status bar for Pi: host resources on one header line, and location, model, context, and measured request performance on two footer lines.
 
-Pi 原生扩展，不是 Codex skill。它只接管 TUI 的 header 和 footer，不新增页面、不启动后台服务、不产生网络请求。
+扩展直接使用 Pi 的原生 header 和 footer，不启动后台服务、不产生网络请求。另附可选的 Ghostty 字体切换工具，可切换 Maple Mono 等本机已安装字体。
 
 ![深色主题预览](docs/preview-dark.png)
 
@@ -14,7 +16,7 @@ Pi 原生扩展，不是 Codex skill。它只接管 TUI 的 header 和 footer，
 
 - **轻量布局**：1 行 header（CPU / RAM / 主机名）+ 2 行 footer（cwd / 分支 / 模型 / thinking / 性能指标）。
 - **模型只显示一次**：模型名加粗；实测 TPS 使用灰青色强调；辅助项使用 muted 颜色，不抢内容注意力。
-- **本次请求的指标**：TPS、TTFT、缓存命中率与上下文占用集中在一行。
+- **本次请求的指标**：生成速度（TPS，tokens/s）、首字延迟（TTFT）、缓存命中率与上下文占用集中在一行。
 - **深浅主题自适应**：跟随 Pi 当前主题与浅色/深色外观。
 - **窄终端安全截断**：在 40 / 60 / 80 / 120 / 160 列宽度下都不会溢出，路径中间省略、分支与模型尾部省略。
 - **次要信息按需查看**：累计 tokens、provider、完整 RAM、TTFT 与速度等通过 `/native-status details` 查看。
