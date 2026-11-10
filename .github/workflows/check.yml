@@ -38,6 +38,11 @@ jobs:
       - name: Check Python 3
         run: python3 --version
 
+      - name: Set up terminal test dependencies
+        run: |
+          python3 -m venv .venv-test
+          .venv-test/bin/python -m pip install -r requirements-test.txt
+
       - name: Install dependencies
         run: npm ci
 
@@ -52,3 +57,6 @@ jobs:
 
       - name: Offline PTY smoke test
         run: npm run test:smoke
+
+      - name: Fullscreen scrolling regression
+        run: .venv-test/bin/python test/pty-scroll.py

@@ -1,0 +1,3 @@
+# Terminal-screen parser for the offline fullscreen scrolling regression only.
+pyte==0.8.2
+wcwidth==0.9.4

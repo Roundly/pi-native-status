@@ -1,10 +1,10 @@
 # Pi CLI 原生状态栏 · pi-native-status
 
-为 Pi Coding Agent 打造的轻量终端状态栏：顶部查看 CPU、内存与主机信息，底部用两行整齐呈现工作目录、Git 分支、模型、上下文占用，以及当前请求的首字延迟（TTFT）、生成速度（TPS）与缓存命中率。支持 macOS 和 Linux，适配深色与浅色主题。
+为 Pi Coding Agent 打造的轻量终端状态栏：全屏模式下在固定顶部查看 CPU、内存与主机信息，底部用两行整齐呈现工作目录、Git 分支、模型、上下文占用，以及当前请求的首字延迟（TTFT）、生成速度（TPS）与缓存命中率。支持 macOS 和 Linux，适配深色与浅色主题。
 
 A compact native status bar for Pi: host resources on one header line, and location, model, context, and measured request performance on two footer lines.
 
-扩展直接使用 Pi 的原生 header 和 footer，不启动后台服务、不产生网络请求。另附可选的 Ghostty 字体切换工具，可切换 Maple Mono 等本机已安装字体。
+扩展在 Pi 全屏布局中为顶部资源栏单独预留一行，并使用原生 footer；不启动后台服务、不产生网络请求。另附可选的 Ghostty 字体切换工具，可切换 Maple Mono 等本机已安装字体。
 
 ![深色主题预览](docs/preview-dark.png)
 
@@ -14,6 +14,7 @@ A compact native status bar for Pi: host resources on one header line, and locat
 
 ## 特点
 
+- **固定顶部**：Pi 全屏模式下，资源栏始终位于屏幕第一行，聊天正文从下一行开始滚动。
 - **轻量布局**：1 行 header（CPU / RAM / 主机名）+ 主体 2 行 footer（cwd / 分支 / 模型 / thinking / 性能指标）。其他扩展提供非空状态时，另加 1 行低权重状态，保留扩展间的兼容性。
 - **模型只显示一次**：模型名加粗；实测 TPS 使用灰青色强调；辅助项使用 muted 颜色，不抢内容注意力。
 - **请求指标**：生成速度（TPS，tokens/s）、首字延迟（TTFT）、缓存命中率与上下文占用集中在一行。最近一次已完成请求的性能保留至新请求开始。
@@ -27,10 +28,10 @@ A compact native status bar for Pi: host resources on one header line, and locat
 要求 Pi 1.5.0（已在 macOS 与 Linux 验证）、Node.js >= 22.19。运行时 SDK 由 Pi 提供，插件通过 `peerDependencies: "*"` 使用；没有运行时第三方依赖，也没有安装 hooks。
 
 ```bash
-pi install git:github.com/Roundly/pi-native-status@v0.4.2
+pi install git:github.com/Roundly/pi-native-status@v0.4.3
 ```
 
-通过 Git 安装过旧版的用户，重新执行上面的安装命令即可更新到 `v0.4.2`，随后执行 `/reload`。手动复制安装的迁移方式见下方“避免重复加载”。
+通过 Git 安装过旧版的用户，重新执行上面的安装命令即可更新到 `v0.4.3`，随后执行 `/reload`。手动复制安装的迁移方式见下方“避免重复加载”。
 
 安装后在 Pi 中执行：
 
@@ -43,6 +44,14 @@ pi install git:github.com/Roundly/pi-native-status@v0.4.2
 ```text
 /native-status
 ```
+
+### 全屏固定布局
+
+Pi 1.5.0 默认使用全屏模式。此模式下，顶部资源栏固定在聊天滚动区之外，正文、输入区和底部状态栏各自保留原有空间。
+
+若使用 `--tui-mode regular`，终端的原生历史滚动会移动整个屏幕，资源栏会作为普通 header 显示。需要固定顶部时，请在 `/settings` 中把 TUI mode 设为 `fullscreen`，或使用 `pi --tui-mode fullscreen` 启动。
+
+固定布局适配会检查宿主结构；无法识别时保留兼容 header 并提示原因，可通过 `/native-status details` 查看状态。
 
 ### 开关与详情
 
@@ -59,7 +68,7 @@ pi install git:github.com/Roundly/pi-native-status@v0.4.2
 使用与安装时相同的 source 卸载：
 
 ```bash
-pi remove git:github.com/Roundly/pi-native-status@v0.4.2
+pi remove git:github.com/Roundly/pi-native-status@v0.4.3
 ```
 
 ### 避免重复加载
@@ -99,17 +108,25 @@ npm run typecheck
 npm test            # 单元与渲染测试
 npm run test:fonts  # 字体工具测试，需要 Python 3
 npm run test:smoke  # 离线 PTY 冒烟测试，使用隔离的 mock provider，不产生费用
+npm run test:scroll # 全屏多屏长对话滚动测试，需要下方 Python 测试依赖
 npm run preview     # 生成终端预览
 ```
 
-`test:smoke` 使用独立的临时 agent 目录和 mock provider，不读取用户的 Pi 配置，也不访问真实模型。
+`test:smoke` 与 `test:scroll` 使用独立的临时 agent 目录和 mock provider，不读取用户的 Pi 配置，也不访问真实模型。滚动测试需要终端屏幕解析器，可先建立测试环境：
+
+```bash
+python3 -m venv .venv-test
+. .venv-test/bin/activate
+python -m pip install -r requirements-test.txt
+npm run test:scroll
+```
 
 ## 兼容性
 
 - Pi 1.5.0：已在 macOS 与 Linux 验证。
 - Node.js >= 22.19；日常开发测试使用 Node.js 24。
-- CI 配置覆盖 Ubuntu / Node.js 22.19.0、Ubuntu / Node.js 24、macOS / Node.js 24，运行类型检查、单元测试、字体工具测试与离线 PTY 冒烟测试。
-- Python 3：仅用于可选的字体工具测试与离线 PTY 冒烟测试。
+- CI 配置覆盖 Ubuntu / Node.js 22.19.0、Ubuntu / Node.js 24、macOS / Node.js 24，运行类型检查、单元测试、字体工具测试与离线 PTY 测试；滚动测试额外使用 `requirements-test.txt` 中的测试依赖。
+- Python 3：仅用于可选的字体工具测试与离线 PTY 测试；滚动测试额外使用 `requirements-test.txt` 中的测试依赖。
 
 ## 许可证
 

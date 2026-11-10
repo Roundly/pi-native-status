@@ -25,7 +25,8 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, type TUI } from "@earendil-works/pi-tui";
+import { FixedHeaderSlot, type HeaderPlacement } from "./fixed-header.ts";
 import { RequestMetrics, type RequestOutcome } from "./metrics.ts";
 import { ResourceSampler, type ResourceSnapshot } from "./resources.ts";
 import {
@@ -185,6 +186,8 @@ export class NativeStatusRuntime {
   private thinking: string | null = null;
   private readonly runningTools = new Map<string, RunningTool>();
   private lastTool: LastTool | null = null;
+  private headerSlot: FixedHeaderSlot | null = null;
+  private readonly headerWarnings = new Set<HeaderPlacement>();
 
   constructor(pi: ExtensionAPI, deps: Partial<RuntimeDeps> = {}) {
     this.pi = pi;
@@ -273,17 +276,26 @@ export class NativeStatusRuntime {
   }
 
   private headerComponent(
-    tui: { requestRender(): void },
+    tui: TUI,
     theme: Theme,
   ): { render(width: number): string[]; invalidate(): void; dispose(): void } {
     this.tui = tui;
     this.style = styleFromTheme(theme);
     const listener = () => tui.requestRender();
     this.renderListeners.add(listener);
+    this.headerSlot?.dispose();
+    const slot = new FixedHeaderSlot({
+      render: (width) => this.renderHeader(width),
+      invalidate: () => {},
+    });
+    this.headerSlot = slot;
+    slot.attach(tui);
     return {
-      render: (width: number) => this.renderHeader(width),
+      render: (width: number) => slot.sync() === "fixed" ? [] : this.renderHeader(width),
       invalidate: () => {},
       dispose: () => {
+        slot.dispose();
+        if (this.headerSlot === slot) this.headerSlot = null;
         this.renderListeners.delete(listener);
         if (this.tui === tui) this.tui = null;
       },
@@ -367,6 +379,7 @@ export class NativeStatusRuntime {
     const cpuText = typeof cpu === "number" && Number.isFinite(cpu) ? `${Math.round(cpu * 100)}%` : "—";
     return [
       "native-status 详情",
+      `顶部布局: ${this.headerSlot?.describe() ?? "未挂载"}`,
       `主机: ${sanitizeText(view.resources?.host ?? "") || "—"}`,
       `模型: ${sanitizeText(view.model?.id ?? "") || "—"}`,
       `Provider: ${sanitizeText(view.model?.provider ?? "") || "—"}`,
@@ -614,12 +627,25 @@ export class NativeStatusRuntime {
 
   private sample(): void {
     if (!this.running) return;
+    this.updateHeaderPlacement();
     try {
       this.resources = this.deps.sampler.sample();
     } catch {
       this.resources = null;
     }
     this.invalidate();
+  }
+
+  private updateHeaderPlacement(): void {
+    const state = this.headerSlot?.sync();
+    if (!state || state === "fixed" || state === "detached" || this.headerWarnings.has(state)) return;
+    this.headerWarnings.add(state);
+    this.ctx?.ui.notify(
+      state === "regular"
+        ? "固定顶部需要 fullscreen 模式；可在 /settings 中切换 TUI mode。当前使用普通 header。"
+        : "当前宿主布局无法识别，已保留普通 header；可用 /native-status details 查看顶部布局状态。",
+      "warning",
+    );
   }
 
   private startSampling(): void {
@@ -665,6 +691,9 @@ export class NativeStatusRuntime {
   private stop(restore: boolean): void {
     const ctx = this.ctx;
     this.running = false;
+    this.headerSlot?.dispose();
+    this.headerSlot = null;
+    this.headerWarnings.clear();
     this.stopSampling();
     if (this.renderTimer !== null) {
       this.deps.timers.clearTimeout(this.renderTimer);

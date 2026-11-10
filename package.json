@@ -1,6 +1,6 @@
 {
   "name": "pi-native-status",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "private": true,
   "type": "module",
   "description": "A compact native Pi status bar with host resources and measured request performance.",
@@ -11,6 +11,7 @@
   },
   "files": [
     "index.ts",
+    "fixed-header.ts",
     "render.ts",
     "metrics.ts",
     "resources.ts",
@@ -25,6 +26,7 @@
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "test:fonts": "python3 -m unittest discover -s tools/tests -v",
     "test:smoke": "python3 test/pty-smoke.py",
+    "test:scroll": "python3 test/pty-scroll.py",
     "preview": "node --experimental-strip-types test/render-preview.ts"
   },
   "devDependencies": {
