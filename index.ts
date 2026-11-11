@@ -34,7 +34,7 @@ import {
   buildHeaderLines,
   formatCacheHit,
   formatContextPercent,
-  formatRam,
+  formatRamUsage,
   formatThroughput,
   formatTokens,
   formatTtft,
@@ -377,6 +377,7 @@ export class NativeStatusRuntime {
     const windowSize = context?.contextWindow ?? 0;
     const cpu = view.resources?.cpuRatio;
     const cpuText = typeof cpu === "number" && Number.isFinite(cpu) ? `${Math.round(cpu * 100)}%` : "—";
+    const ram = formatRamUsage(view.resources);
     return [
       "native-status 详情",
       `顶部布局: ${this.headerSlot?.describe() ?? "未挂载"}`,
@@ -385,7 +386,7 @@ export class NativeStatusRuntime {
       `Provider: ${sanitizeText(view.model?.provider ?? "") || "—"}`,
       `Thinking: ${sanitizeText(view.thinking ?? "") || "—"}`,
       `CPU: ${cpuText}`,
-      `RAM: ${formatRam(view.resources?.memoryUsedBytes)} / ${formatRam(view.resources?.memoryTotalBytes)}`,
+      `RAM 已用/总量: ${ram.amount}${ram.percent ? ` (${ram.percent})` : ""}`,
       `上下文: ${formatTokens(context?.tokens)} / ${windowSize > 0 ? formatTokens(windowSize) : "—"} (${formatContextPercent(context?.percent) ?? "—"})`,
       `累计: ↑${formatTokens(view.totalInput)} ↓${formatTokens(view.totalOutput)}`,
       `缓存: ${formatCacheHit(cache)}`,
@@ -781,7 +782,7 @@ export class NativeStatusRuntime {
       [
         "native-status（Pi 原生状态栏）",
         "/native-status on | off | details",
-        "CPU/RAM 为运行 Pi 的主机（RAM=total-free，含缓存）；上下文来自 ctx.getContextUsage()。",
+        "CPU/RAM 来自运行 Pi 的主机。RAM 显示已用/总量和占用率，已用内存含系统缓存。上下文来自 ctx.getContextUsage()。",
         "缓存=本次 cacheRead/(input+cacheRead+cacheWrite)；≈tok/s=provider output/首字到消息结束；TTFT=请求→首个非空输出片段。未知显示 —，不估算 token、不显示 5h/7d 额度。",
       ].join("\n"),
       "info",

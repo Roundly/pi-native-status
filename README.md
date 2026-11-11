@@ -28,10 +28,10 @@ A compact native status bar for Pi: host resources on one header line, and locat
 要求 Pi 1.5.0（已在 macOS 与 Linux 验证）、Node.js >= 22.19。运行时 SDK 由 Pi 提供，插件通过 `peerDependencies: "*"` 使用；没有运行时第三方依赖，也没有安装 hooks。
 
 ```bash
-pi install git:github.com/Roundly/pi-native-status@v0.4.3
+pi install git:github.com/Roundly/pi-native-status@v0.4.4
 ```
 
-通过 Git 安装过旧版的用户，重新执行上面的安装命令即可更新到 `v0.4.3`，随后执行 `/reload`。手动复制安装的迁移方式见下方“避免重复加载”。
+通过 Git 安装过旧版的用户，重新执行上面的安装命令即可更新到 `v0.4.4`，随后执行 `/reload`。手动复制安装的迁移方式见下方“避免重复加载”。
 
 安装后在 Pi 中执行：
 
@@ -68,7 +68,7 @@ Pi 1.5.0 默认使用全屏模式。此模式下，顶部资源栏固定在聊�
 使用与安装时相同的 source 卸载：
 
 ```bash
-pi remove git:github.com/Roundly/pi-native-status@v0.4.3
+pi remove git:github.com/Roundly/pi-native-status@v0.4.4
 ```
 
 ### 避免重复加载
@@ -80,7 +80,7 @@ pi remove git:github.com/Roundly/pi-native-status@v0.4.3
 | 指标 | 含义 |
 | --- | --- |
 | CPU | 本机所有核心的差分利用率。启动后的首次采样没有差值，显示 `—`。 |
-| RAM | `total - free`，包含系统缓存，不等同于“应用实际占用”。 |
+| RAM | `43/64G 67%` 表示已用 43 GiB、总量 64 GiB、占用率约 67%。已用量按总量减空闲量计算，包含系统缓存。 |
 | TTFT | 从发起请求到收到第一个非空的 text / thinking / tool-call 片段。 |
 | TPS | `provider usage.output` 除以“首个片段 → `message_end`”的客户端耗时。这是整段生成的平均值，不是流式实时 token 速率。 |
 | 缓存 | 本次请求的 `cacheRead / (input + cacheRead + cacheWrite)`。 |

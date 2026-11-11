@@ -170,6 +170,19 @@ export function formatRam(value: number | null | undefined): string {
   }
 }
 
+export function formatRamUsage(resources: ResourceSnapshot | null): { amount: string; percent: string | null } {
+  const used = resources?.memoryUsedBytes ?? null;
+  const total = resources?.memoryTotalBytes ?? null;
+  const usedText = formatRam(used);
+  if (total === null || !Number.isFinite(total) || total <= 0) return { amount: usedText, percent: null };
+
+  const totalText = formatRam(total);
+  if (used === null || usedText === "—" || used > total) return { amount: `—/${totalText}`, percent: null };
+
+  const usedAmount = usedText.at(-1) === totalText.at(-1) ? usedText.slice(0, -1) : usedText;
+  return { amount: `${usedAmount}/${totalText}`, percent: percentLabel(used / total) };
+}
+
 /** Cache hit is this request's prompt cache ratio, never a session total. */
 export function formatCacheHit(ratio: number | null | undefined): string {
   if (typeof ratio !== "number" || !Number.isFinite(ratio) || ratio < 0) return "—";
@@ -377,21 +390,18 @@ export interface FooterView {
   tool: ToolView | null;
 }
 
-/** One-line header: fixed CPU/RAM fields left, host dimmed right. */
+/** One-line header: CPU and memory usage left, host dimmed right. */
 export function buildHeaderLines(view: HeaderView, width: number, style: Style): string[] {
   const safeWidth = Math.max(1, Math.floor(width));
   const padding = layoutPadding(safeWidth);
   const innerWidth = Math.max(1, safeWidth - padding * 2);
-  const cpu = fitField(percentLabel(view.resources?.cpuRatio ?? null), 4);
-  const ramText = formatRam(view.resources?.memoryUsedBytes ?? null);
-  const ramWidth = Math.max(4, visibleWidth(ramText));
-  const ram = fitField(ramText, ramWidth);
-  const left =
-    style.fg("muted", "CPU ") +
-    style.fg("muted", cpu) +
-    style.fg("muted", " / ") +
-    style.fg("muted", "RAM ") +
-    style.fg("muted", ram);
+  const cpu = `CPU ${fitField(percentLabel(view.resources?.cpuRatio ?? null), 4)}`;
+  const { amount, percent } = formatRamUsage(view.resources);
+  const compactRam = `RAM ${percent ?? amount}`;
+  const fullRam = percent ? `RAM ${amount} ${percent}` : compactRam;
+  // Keep the RAM reading intact even when only the percentage fits.
+  const readings = [`${cpu} / ${fullRam}`, `${cpu} / ${compactRam}`, compactRam, cpu.trimEnd()];
+  const left = readings.find((reading) => visibleWidth(reading) <= innerWidth) ?? "RAM";
   // Host placement follows the real left block: no fixed 19-cell assumption.
   const leftWidth = visibleWidth(left);
   const host = sanitizeText(view.host ?? "") || "unknown";
@@ -399,7 +409,7 @@ export function buildHeaderLines(view: HeaderView, width: number, style: Style):
   const hostText = hostBudget >= 4 ? truncateToWidth(host, hostBudget, "…") : "";
   const gap = hostText ? Math.max(2, innerWidth - leftWidth - visibleWidth(hostText)) : 0;
   return [insetLine(
-    `${left}${" ".repeat(gap)}${hostText ? style.fg("dim", hostText) : ""}`,
+    `${style.fg("muted", left)}${" ".repeat(gap)}${hostText ? style.fg("dim", hostText) : ""}`,
     safeWidth,
   )];
 }

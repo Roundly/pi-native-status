@@ -634,7 +634,7 @@ test("/native-status details reports collected numbers without chat content", as
   assert.match(text, /Provider: mock/);
   assert.match(text, /Thinking: high/);
   assert.match(text, /CPU: 25%/);
-  assert.match(text, /RAM: 8\.0G \/ 16G/);
+  assert.match(text, /RAM 已用\/总量: 8\.0\/16G \(50%\)/);
   assert.match(text, /上下文: 1\.0k \/ 128k \(0\.8%\)/);
   assert.match(text, /累计: ↑1\.0k ↓100/);
   assert.match(text, /缓存: 90%/);

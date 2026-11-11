@@ -163,11 +163,11 @@ test("numeric fields keep their unit and value across carry and large magnitudes
   assert.equal(formatTtft(86_400_000_000), "1000d");
 
   const wideHeader = plain(buildHeaderLines(
-    { ...header, resources: { ...resources(), cpuRatio: 1, memoryUsedBytes: 999.6 * g } },
+    { ...header, resources: { ...resources(), cpuRatio: 1, memoryUsedBytes: 999.6 * g, memoryTotalBytes: 2048 * g } },
     80,
     ansiStyle,
   )).split("\n")[0];
-  assert.match(wideHeader, /CPU 100% \/ RAM 1\.0T/);
+  assert.match(wideHeader, /CPU 100% \/ RAM 1\.0\/2\.0T 49%/);
   assert.doesNotMatch(wideHeader, /…/);
   assert.ok(wideHeader.trimEnd().endsWith("nuc"));
 });
@@ -290,10 +290,31 @@ test("header is one compact line with stable CPU/RAM fields and host on the righ
   assert.equal(nine.indexOf("RAM"), full.indexOf("RAM"));
   assert.equal(nine.length, full.length);
   assert.match(nine, /CPU/);
-  assert.match(nine, /RAM 13G/);
+  assert.match(nine, /RAM 13\/32G 39%/);
   assert.match(nine, /nuc\s*$/);
   assert.doesNotMatch(nine, /Model:|[⣀-⣿]/);
   assert.equal(layoutPadding(80), 2);
+});
+
+test("header shows raw memory usage as used/total and a complete percentage at narrow widths", () => {
+  const g = 1024 ** 3;
+  const reading = (used: number | null, total: number | null, width = 80) => {
+    const line = buildHeaderLines({
+      ...header,
+      resources: { ...resources(), memoryUsedBytes: used, memoryTotalBytes: total },
+    }, width, ansiStyle)[0];
+    assert.ok(visibleWidth(line) <= width);
+    return plain([line]);
+  };
+  assert.match(reading(42.51 * g, 64.49 * g), /RAM 43\/64G 66%/);
+  assert.equal(reading(42.51 * g, 64.49 * g, 20).trimEnd(), "CPU 42%  / RAM 66%");
+  assert.equal(reading(64 * g, 64 * g, 9).trimEnd(), "RAM 100%");
+  assert.match(reading(512 * g, 1024 * g), /RAM 512G\/1\.0T 50%/);
+  assert.match(reading(0, 64 * g), /RAM 0\.0\/64G 0%/);
+  assert.match(reading(43 * g, null), /RAM 43G\s+nuc/);
+  assert.match(reading(null, 64 * g), /RAM —\/64G\s+nuc/);
+  assert.match(reading(43 * g, 0), /RAM 43G\s+nuc/);
+  assert.match(reading(65 * g, 64 * g), /RAM —\/64G\s+nuc/);
 });
 
 test("footer is two lines at every target width, with the model only once", () => {
